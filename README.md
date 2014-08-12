@@ -1,8 +1,14 @@
 # Heroku buildpack: PHP
 
-This is a [Heroku buildpack](http://devcenter.heroku.com/articles/buildpacks) for PHP applications.
+This is a customised [Heroku buildpack](http://devcenter.heroku.com/articles/buildpacks) for PHP applications on Dokku.
 
 It uses Composer for dependency management, supports PHP or HHVM (experimental) as runtimes, and offers a choice of Apache2 or Nginx web servers.
+
+## Dokku
+
+[Dokku](https://github.com/progrium/dokku/) is built on [Docker](https://www.docker.com/) and provides a mini-Heroku PaaS system for self-hosted implementations. It runs nearly everything that Heroku does.
+
+> To enable the Heroku PHP buildpack to run on Dokku `php-fpm.conf` must be modified to fix a permissions error as documented [by this commit](https://github.com/CubicApps/heroku-buildpack-php/commit/b16ea176a30b8f82413f8baafd3350a4cfdf64ad). 
 
 ## Usage
 
