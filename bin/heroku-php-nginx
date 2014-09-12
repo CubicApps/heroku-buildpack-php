@@ -53,7 +53,7 @@ Options:
                           Recommended approach when customizing Nginx's config
                           in most cases, unless you need to set http or
                           fundamental server level options.
-                          [default: $COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/nginx/default_include.conf.php]
+                          [default: \$COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/nginx/default_include.conf.php]
   -c <nginx.conf>         The path to the full configuration file that is
                           included after Heroku's (or your local) Nginx config
                           is loaded. It must contain an 'http { ... }' block
@@ -61,23 +61,23 @@ Options:
                           and 'root' (see option -C above), but no global,
                           directives (globals are read from the system's default
                           Nginx configuration files).
-                          [default: $COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/nginx/heroku.conf.php]
+                          [default: \$COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/nginx/heroku.conf.php]
   -F <php-fpm.inc.conf>   The path to the configuration file to include at the  
                           end of php-fpm.conf (see option -f below), in the
                           '[www]' pool section. Recommended approach when
                           customizing PHP-FPM's configuration in most cases,
                           unless you need to set global options.
   -f <php-fpm.conf>       The path to the full PHP-FPM configuration file.
-                          [default: $COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/php/php-fpm.conf]
-  -h                      Display this help screen and exit.
+                          [default: \$COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/php/php-fpm.conf]
+  -h, --help              Display this help screen and exit.
   -i <php.ini>            The path to the php.ini file to use.
-                          [default: $COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/php/php.ini]
+                          [default: \$COMPOSER_VENDOR_DIR/heroku/heroku-buildpack-php/conf/php/php.ini]
   -l <tailme.log>         Path to additional log file to tail to STDERR so its
                           contents appear in 'heroku logs'. If the file does not
                           exist, it will be created. Wildcards are allowed, but
                           must be quoted and must match already existing files.
                           Note: this option can be repeated multiple times.
-  -v                      Be more verbose during startup.
+  -v, --verbose           Be more verbose during startup.
 
 All file paths must be relative to '$HEROKU_APP_DIR'.
 
@@ -95,13 +95,42 @@ export HEROKU_APP_DIR=$(pwd)
 export DOCUMENT_ROOT="$HEROKU_APP_DIR"
 # set a default port if none is given
 export PORT=${PORT:-$(( $RANDOM+1024 ))}
-export COMPOSER_VENDOR_DIR=$(composer config vendor-dir 2> /dev/null | tail -n 1) # tail, as composer echos outdated version warnings to STDOUT
-export COMPOSER_BIN_DIR=$(composer config bin-dir 2> /dev/null | tail -n 1) # tail, as composer echos outdated version warnings to STDOUT
 
 # our standard logs
 logs=( "/tmp/heroku.php-fpm.$PORT.log" "/tmp/heroku.nginx_access.$PORT.log" )
 
-while getopts ":C:c:F:f:i:l:vh" opt; do
+optstring=":-:C:c:F:f:i:l:vh"
+
+# process flags first
+while getopts "$optstring" opt; do
+    case $opt in
+        -)
+            case "$OPTARG" in
+                verbose)
+                    verbose=1
+                    ;;
+                help)
+                    print_help 2>&1
+                    exit
+                    ;;
+                *)
+                    echo "Invalid option: --$OPTARG" >&2
+                    exit
+                    ;;
+            esac
+            ;;
+        v)
+            verbose=1
+            ;;
+        h)
+            print_help 2>&1
+            exit
+            ;;
+    esac
+done
+
+OPTIND=1 # start over with options parsing
+while getopts "$optstring" opt; do
     case $opt in
         C)
             nginx_config_include=$(check_exists "$OPTARG" "C")
@@ -130,15 +159,9 @@ while getopts ":C:c:F:f:i:l:vh" opt; do
                     exit 1
                 fi
                 touch_log "$logfile" || { echo "Could not touch '$logfile'; permissions problem?" >&2; exit 1; }
+                [[ $verbose ]] && echo "Tailing '$logfile' to stderr" >&2
                 logs+=("$logfile") # must quote here in case a wildcard matched a file with a space in the name
             done
-            ;;
-        v)
-            verbose=1
-            ;;
-        h)
-            print_help 2>&1
-            exit
             ;;
         \?)
             echo "Invalid option: -$OPTARG" >&2
@@ -159,8 +182,23 @@ make sure to list them before any document root argument you're providing."
     exit 2
 fi
 
+php() {
+    # the newrelic extension logs to stderr which would pollute boot output with each invocation of PHP, and each call to PHP would be logged to NR as non-web traffic, so we disable it for the next few CLI calls
+    `which php` -dnewrelic.enabled=0 -dnewrelic.loglevel=error -dnewrelic.daemon.dont_launch=3 -dnewrelic.daemon.loglevel=error "$@"
+}
+php-fpm() {
+    # the newrelic extension logs to stderr which would pollute boot output with each invocation of php-fpm, and each call to php-fpm would be logged to NR as non-web traffic, so we disable it for the next version check call
+    `which php-fpm` -dnewrelic.enabled=0 -dnewrelic.loglevel=error -dnewrelic.daemon.dont_launch=3 -dnewrelic.daemon.loglevel=error "$@"
+}
 php -r 'exit((int)version_compare(PHP_VERSION, "5.5.11", "<"));' || { echo "This program requires PHP 5.5.11 or newer; check your 'php' command." >&2; exit 1; }
 { php-fpm -v | php -r 'exit((int)version_compare(preg_replace("#PHP (\S+) \(fpm-fcgi\).+$#sm", "\\1", file_get_contents("php://stdin")), "5.5.11", "<"));'; } || { echo "This program requires PHP 5.5.11 or newer; check your 'php-fpm' command." >&2; exit 1; }
+
+# make sure we run a local composer.phar if present, or global composer if not
+composer() {
+    php $(which ./composer.phar composer | head -n1) "$@"
+}
+COMPOSER_VENDOR_DIR=$(composer config vendor-dir 2> /dev/null | tail -n 1) && export COMPOSER_VENDOR_DIR || { echo "Unable to determine Composer vendor-dir setting; is 'composer' executable on path or 'composer.phar' in current working directory?"; exit 1; } # tail, as composer echos outdated version warnings to STDOUT; export after the assignment or exit status will that be of 'export
+COMPOSER_BIN_DIR=$(composer config bin-dir 2> /dev/null | tail -n 1) && export COMPOSER_BIN_DIR || { echo "Unable to determine Composer vendor-dir setting; is 'composer' executable on path or 'composer.phar' in current working directory?"; exit 1; } # tail, as composer echos outdated version warnings to STDOUT; export after the assignment or exit status will that be of 'export
 
 [[ -z ${DYNO-} || $verbose ]] && echo "Booting on port $PORT..." >&2
 
@@ -229,6 +267,7 @@ trap 'trap - EXIT; echo "Going down, terminating child processes..." >&2; jobs -
 ( touch "${logs[@]}"; tail -qF -n 0 "${logs[@]}" 1>&2 || true; echo 'tail "${logs[@]}"' >&3; ) 3> $wait_pipe &
 # start FPM; write "php-fpm" to the shared pipe if it exits
 echo "Starting php-fpm..." >&2
+unset -f php-fpm # remove the alias we made earlier that would prevent newrelic from starting on php-fpm -v
 ( php-fpm --nodaemonize -y "$fpm_config" -c "$php_config" || true; echo "php-fpm" >&3; ) 3> $wait_pipe &
 # wait a few seconds for FPM to finish initializing; otherwise an early request might break nginx with the FastCGI pipe not being ready
 # start nginx; write "nginx" to the shared pipe if it exits
